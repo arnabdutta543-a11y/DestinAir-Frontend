@@ -1,12 +1,14 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { useSearchStore, useCurrencyStore } from '@/lib/store'
 import {
   MapPin, Navigation, ArrowLeftRight, Calendar,
   Users, ChevronDown, Search, Minus, Plus, Building2, PlusCircle, Trash2, Plane, Loader2, Star,
 } from 'lucide-react'
+import { PriceCalendar } from '@/components/flights/PriceCalendar'
 
 // ── SerpAPI autocomplete suggestion shape ────────────────────────────────────
 interface SerpAirport {
@@ -175,29 +177,186 @@ function AirportInput({
   )
 }
 
-/* ─── DateInput ─────────────────────────────────────────────────────────────── */
-function DateInput({ id, label, value, min, onChange, required }: {
-  id: string; label: string; value: string; min?: string;
-  onChange: (v: string) => void; required?: boolean
+/* ─── SimpleDatePicker ───────────────────────────────────────────────────────── */
+const SMONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+const SFULL   = ['January','February','March','April','May','June','July','August','September','October','November','December']
+const SDAYS   = ['Mo','Tu','We','Th','Fr','Sa','Su']
+function SimpleDatePicker({ value, min, onChange, onClose }: {
+  value: string; min?: string; onChange: (v: string) => void; onClose: () => void
 }) {
-  const [focused, setFocused] = useState(false)
+  const today = new Date(); today.setHours(0,0,0,0)
+  const [year,  setYear]  = useState(today.getFullYear())
+  const [month, setMonth] = useState(today.getMonth())
+
+  const daysInM = new Date(year, month + 1, 0).getDate()
+  const startDow = ((new Date(year, month, 1).getDay() + 6) % 7)
+  const cells: (number | null)[] = [...Array(startDow).fill(null), ...Array.from({length: daysInM}, (_, i) => i + 1)]
+
+  function ds(day: number) {
+    return `${year}-${String(month + 1).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+  }
+  function isPast(day: number) { return new Date(ds(day) + 'T00:00') < today }
+
+  function prevM() { if (month === 0) { setYear(y => y-1); setMonth(11) } else setMonth(m => m-1) }
+  function nextM() { if (month === 11) { setYear(y => y+1); setMonth(0) } else setMonth(m => m+1) }
+  const canPrev = year > today.getFullYear() || month > today.getMonth()
+
+  return (
+    <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-5 w-[320px]">
+      {/* Month nav */}
+      <div className="flex items-center justify-between mb-4">
+        <button type="button" onClick={prevM} disabled={!canPrev}
+          className={`p-1.5 rounded-lg transition-colors ${canPrev ? 'hover:bg-slate-800 text-slate-200' : 'text-slate-600 cursor-not-allowed'}`}>
+          <ChevronDown className="w-4 h-4 rotate-90" />
+        </button>
+        <h4 className="text-sm font-bold text-slate-100">{SFULL[month]} {year}</h4>
+        <button type="button" onClick={nextM} className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-200 transition-colors">
+          <ChevronDown className="w-4 h-4 -rotate-90" />
+        </button>
+      </div>
+      {/* Day headers */}
+      <div className="grid grid-cols-7 mb-1">
+        {SDAYS.map(d => (
+          <div key={d} className="text-center text-[10px] font-bold text-slate-500 uppercase py-1">{d}</div>
+        ))}
+      </div>
+      {/* Day cells */}
+      <div className="grid grid-cols-7 gap-y-1">
+        {cells.map((day, idx) => {
+          if (!day) return <div key={`e-${idx}`} />
+          const dateStr = ds(day)
+          const past    = isPast(day)
+          const sel     = dateStr === value
+          return (
+            <button key={dateStr} type="button" disabled={past}
+              onClick={() => { onChange(dateStr); onClose() }}
+              className={`
+                w-9 h-9 mx-auto rounded-full flex items-center justify-center text-[13px] font-semibold
+                transition-all duration-150
+                ${past ? 'text-slate-600 cursor-not-allowed' : 'cursor-pointer'}
+                ${sel ? 'bg-sky-500 text-white ring-2 ring-sky-300 ring-offset-1 ring-offset-slate-900' : ''}
+                ${!past && !sel ? 'text-slate-200 hover:bg-slate-700' : ''}
+              `}
+            >{day}</button>
+          )
+        })}
+      </div>
+      <button type="button" onClick={onClose}
+        className="w-full mt-4 py-2 bg-sky-600 hover:bg-sky-700 text-white text-sm font-bold rounded-xl transition-colors">
+        Done
+      </button>
+    </div>
+  )
+}
+
+/* ─── CalendarDateInput ────────────────────────────────────────────────────
+   Clicking the input opens a portal-based dropdown (never clipped).         */
+function CalendarDateInput({ id, label, value, min, onChange, required,
+  origin, destination, returnValue, onReturnChange, mode = 'single',
+}: {
+  id: string; label: string; value: string; min?: string
+  onChange: (v: string) => void; required?: boolean
+  origin?: string; destination?: string
+  returnValue?: string; onReturnChange?: (v: string) => void
+  mode?: 'single' | 'range'
+}) {
+  const [open, setOpen]   = useState(false)
+  const [pos,  setPos]    = useState({ top: 0, left: 0, width: 700 })
+  const triggerRef        = useRef<HTMLDivElement>(null)
+  const dropRef           = useRef<HTMLDivElement>(null)
+  const showCalendar      = !!(origin && destination && origin !== destination)
+
+  function openDropdown() {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect()
+      const w    = showCalendar ? 700 : 330
+      // Try to keep within viewport
+      const left = Math.min(rect.left + window.scrollX, window.innerWidth + window.scrollX - w - 16)
+      setPos({ top: rect.bottom + window.scrollY + 6, left: Math.max(8, left), width: w })
+    }
+    setOpen(o => !o)
+  }
+
+  useEffect(() => {
+    if (!open) return
+    function handler(e: MouseEvent) {
+      const t = e.target as Node
+      if (triggerRef.current?.contains(t)) return
+      if (dropRef.current?.contains(t)) return
+      setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const display = value
+    ? new Date(value + 'T00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+    : ''
+
   return (
     <div className="flex-1 min-w-0">
       <label htmlFor={id} className="block text-[11px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-1.5">
         <span className="flex items-center gap-1.5"><Calendar className="w-3 h-3" />{label}</span>
       </label>
-      <div className={`relative flex items-center h-14 rounded-xl border-2 transition-all duration-200 bg-slate-50 dark:bg-slate-800/60
-        ${focused ? 'border-sky-500 shadow-[0_0_0_4px_rgba(14,165,233,0.12)]' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}`}>
+
+      {/* Trigger — matches From/To input style */}
+      <div
+        ref={triggerRef}
+        onClick={openDropdown}
+        className={`
+          relative flex items-center h-14 rounded-xl border-2 cursor-pointer
+          transition-all duration-200
+          bg-white/5 dark:bg-white/5 backdrop-blur-sm
+          ${open
+            ? 'border-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,0.2)]'
+            : 'border-white/10 hover:border-white/20'
+          }
+        `}
+      >
+        {/* Hidden native input for form validation */}
         <input id={id} type="date" value={value} min={min}
-          onChange={(e) => onChange(e.target.value)}
-          onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-          required={required}
-          className="flex-1 bg-transparent px-4 text-sm font-semibold text-slate-800 dark:text-slate-200 outline-none [color-scheme:light] dark:[color-scheme:dark]"
+          onChange={(e) => onChange(e.target.value)} required={required}
+          className="sr-only" tabIndex={-1}
         />
+        <Calendar className="w-4 h-4 text-slate-400 ml-4 flex-shrink-0" />
+        <span className={`flex-1 px-3 text-sm font-semibold truncate ${
+          value ? 'text-slate-100' : 'text-slate-500'
+        }`}>
+          {display || 'Add date'}
+        </span>
+        {value && (
+          <button type="button"
+            onClick={(e) => { e.stopPropagation(); onChange('') }}
+            className="mr-3 text-slate-500 hover:text-slate-300 transition-colors text-xs"
+          >✕</button>
+        )}
       </div>
+
+      {/* Portal dropdown */}
+      {open && typeof window !== 'undefined' && createPortal(
+        <div
+          ref={dropRef}
+          style={{ position: 'absolute', top: pos.top, left: pos.left, width: pos.width, zIndex: 99999 }}
+        >
+          {showCalendar ? (
+            <PriceCalendar
+              origin={origin!} destination={destination!}
+              selectedDate={value} returnDate={returnValue}
+              onSelectDate={(d) => { onChange(d); if (mode === 'single') setOpen(false) }}
+              onSelectReturn={onReturnChange}
+              mode={mode}
+              onClose={() => setOpen(false)}
+            />
+          ) : (
+            <SimpleDatePicker value={value} min={min} onChange={onChange} onClose={() => setOpen(false)} />
+          )}
+        </div>,
+        document.body
+      )}
     </div>
   )
 }
+
 
 /* ─── PassengerCabinButton ──────────────────────────────────────────────────── */
 function PassengerCabinButton({
@@ -384,13 +543,19 @@ export function FlightSearchForm() {
           </div>
 
           <div className="flex items-end gap-3">
-            <DateInput id="fsf-departure" label="Departure"
+            <CalendarDateInput id="fsf-departure" label="Departure"
               value={flightParams.departureDate || ''} min={today}
-              onChange={(v) => setFlightParams({ departureDate: v })} required />
+              onChange={(v) => setFlightParams({ departureDate: v })} required
+              origin={flightParams.origin} destination={flightParams.destination}
+              returnValue={flightParams.returnDate}
+              onReturnChange={(v) => setFlightParams({ returnDate: v })}
+              mode={tripType === 'roundtrip' ? 'range' : 'single'} />
             {tripType === 'roundtrip' && (
-              <DateInput id="fsf-return" label="Return"
+              <CalendarDateInput id="fsf-return" label="Return"
                 value={flightParams.returnDate || ''} min={flightParams.departureDate || today}
-                onChange={(v) => setFlightParams({ returnDate: v })} required />
+                onChange={(v) => setFlightParams({ returnDate: v })} required
+                origin={flightParams.origin} destination={flightParams.destination}
+                mode="single" />
             )}
             <PassengerCabinButton
               adults={flightParams.adults || 1} cabin={flightParams.travelClass || 'ECONOMY'}
@@ -425,9 +590,10 @@ export function FlightSearchForm() {
                 <AirportInput id={`mc-to-${i}`} label="To" icon={MapPin}
                   value={leg.destination} placeholder="City or airport"
                   onChange={(v) => updateLeg(i, { destination: v })} required />
-                <DateInput id={`mc-date-${i}`} label="Date"
+                <CalendarDateInput id={`mc-date-${i}`} label="Date"
                   value={leg.date} min={i > 0 ? (mcLegs[i - 1].date || today) : today}
-                  onChange={(v) => updateLeg(i, { date: v })} required />
+                  onChange={(v: string) => updateLeg(i, { date: v })} required
+                  origin={leg.origin} destination={leg.destination} mode="single" />
               </div>
             </div>
           ))}
