@@ -385,13 +385,13 @@ export default function HomePage() {
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link
-              href="/register"
+              href="/sign-up"
               className="inline-flex items-center justify-center gap-2 bg-white text-sky-700 font-bold text-base px-8 py-4 rounded-2xl hover:bg-sky-50 transition-colors shadow-lg"
             >
               <Plane className="w-5 h-5" /> Start Searching Free
             </Link>
             <Link
-              href="/login"
+              href="/sign-in"
               className="inline-flex items-center justify-center gap-2 bg-white/20 backdrop-blur text-white font-bold text-base px-8 py-4 rounded-2xl hover:bg-white/30 border border-white/30 transition-colors"
             >
               Sign In

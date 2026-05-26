@@ -14,7 +14,8 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { useCurrencyStore } from '@/lib/store'
-import { useAuth, useClerk, UserButton } from '@clerk/nextjs'
+import { useAuth, UserButton } from '@clerk/nextjs'
+
 
 const CURRENCIES: { code: string; label: string; symbol: string }[] = [
   { code: 'USD', label: 'US Dollar',          symbol: '$'   },
@@ -46,7 +47,6 @@ export function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
   const { isSignedIn } = useAuth()
-  const { openSignIn } = useClerk()
 
   useEffect(() => { setMounted(true) }, [])
 
@@ -143,11 +143,12 @@ export function Navbar() {
 
           {/* ── Clerk Auth ──────────────────────────────────── */}
           {!isSignedIn ? (
-            <Button size="sm"
-              onClick={() => openSignIn()}
-              className="btn-touch bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-700 hover:to-indigo-700 text-white hidden sm:flex shadow-sm">
-              Sign In
-            </Button>
+            <Link href="/sign-in">
+              <Button size="sm"
+                className="btn-touch bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-700 hover:to-indigo-700 text-white hidden sm:flex shadow-sm">
+                Sign In
+              </Button>
+            </Link>
           ) : (
             <>
               {/* Bell icon → price alerts */}
@@ -183,9 +184,11 @@ export function Navbar() {
       {mobileOpen && (
         <div className="md:hidden glass border-t px-4 py-4 flex flex-col gap-2">
           {!isSignedIn && (
-            <Button onClick={() => openSignIn()} className="w-full bg-gradient-to-r from-sky-600 to-indigo-600 text-white mt-2">
-              Sign In
-            </Button>
+            <Link href="/sign-in" onClick={() => setMobileOpen(false)} className="w-full">
+              <Button className="w-full bg-gradient-to-r from-sky-600 to-indigo-600 text-white mt-2">
+                Sign In
+              </Button>
+            </Link>
           )}
           {isSignedIn && (
             <Link href="/dashboard" onClick={() => setMobileOpen(false)}
