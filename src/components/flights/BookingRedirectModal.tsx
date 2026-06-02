@@ -13,6 +13,7 @@ const CURRENCY_SYMBOLS: Record<string, string> = {
   AED: 'د.إ', SGD: 'S$', AUD: 'A$', JPY: '¥', CAD: 'C$',
 }
 
+// API_BASE is kept for any other direct backend calls (e.g. currency)
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
 function fmtTime(iso: string) {
@@ -173,13 +174,16 @@ export function BookingRedirectModal({
         ...(searchParams?.returnDate ? { return_date: searchParams.returnDate }          : {}),
       })
 
-      console.log('[BookingModal] Fetching:', `${API_BASE}/api/v1/flights/booking-options?${params}`)
-      const res  = await fetch(`${API_BASE}/api/v1/flights/booking-options?${params}`)
+      // Use the Next.js proxy route so this call works in both dev and production
+      // (avoids localhost:8000 being called from the browser in hosted environments)
+      const proxyUrl = `/api/flights/booking-options?${params}`
+      console.log('[BookingModal] Fetching via proxy:', proxyUrl)
+      const res  = await fetch(proxyUrl)
       const data = await res.json()
       console.log('[BookingModal] booking-options response:', data)
 
       if (res.ok) {
-        const opts: BookingOption[] = (data.bookingOptions ?? []).map((o: any) => ({
+        const rawOpts: BookingOption[] = (data.bookingOptions ?? []).map((o: any) => ({
           agent:       o.agent      || 'Unknown Provider',
           price:       o.price      || 0,
           bookingUrl:  o.bookingUrl || bookingUrl,
@@ -191,6 +195,10 @@ export function BookingRedirectModal({
           isExact:     o.isExact    || false,
           note:        o.note       || undefined,
         }))
+
+        // The backend now resolves the correct /booking?tfs=...&tfu=... URL server-side.
+        // Just use the options as returned — isExact=true means exact booking page.
+        const opts: BookingOption[] = rawOpts
 
         if (opts.length > 0) {
           setOptions(opts)
@@ -383,19 +391,24 @@ export function BookingRedirectModal({
 
                 // Badge — honest, clear labels
                 let badge: { label: string; color: string } | null = null
-                if (isGF)
-                  badge = { label: 'External Search', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' }
+                if (isGF && opt.isExact)
+                  badge = { label: 'Exact Flight', color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' }
+                else if (isGF)
+                  badge = { label: 'Flight Search', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' }
                 else if (opt.isAirline)
                   badge = { label: 'Direct Booking', color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' }
                 else
                   badge = { label: 'OTA Partner', color: 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300' }
 
                 // Sub-text — honest about what will happen
-                const subText = isGF
-                  ? `View search results for ${offer.origin} → ${offer.destination} on Google Flights`
-                  : opt.isAirline
-                    ? `Continue to ${opt.agent} to book this flight directly`
-                    : `Continue to ${opt.agent} to view their current price`
+                const subText = isGF && opt.isExact
+                  ? `Open this exact flight on Google Flights — pre-selected for you`
+                  : isGF
+                    ? `View search results for ${offer.origin} → ${offer.destination} on Google Flights`
+                    : opt.isAirline
+                      ? `Continue to ${opt.agent} to book this flight directly`
+                      : `Continue to ${opt.agent} to view their current price`
+
 
                 return (
                   <div
